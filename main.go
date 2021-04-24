@@ -28,18 +28,6 @@ func Query(qname string, qtype uint16, ns string) (*dns.Msg, error) {
 
 var zoneDS map[string][]*dns.DS
 
-func VerifyDS(z string, msg *dns.Msg) error {
-	if err := Verify(z, msg); err != nil {
-		return err
-	}
-	for _, rr := range msg.Answer {
-		if rr.Header().Rrtype == dns.TypeDS {
-			zoneDS[rr.Header().Name] = append(zoneDS[rr.Header().Name], rr.(*dns.DS))
-		}
-	}
-	return nil
-}
-
 type ZoneKey struct {
 	ZSK []*dns.DNSKEY
 	KSK []*dns.DNSKEY
@@ -73,7 +61,7 @@ func isKSK(k *dns.DNSKEY) bool {
 	return k.Flags&(1<<8) == (1<<8) && k.Flags&1 == 1
 }
 
-func VerifyKeys(z string, msg *dns.Msg) error {
+func AddKeys(z string, msg *dns.Msg) error {
 	if _, ok := verifiedZones[z]; ok {
 		return nil
 	}
@@ -111,12 +99,16 @@ func VerifyKeys(z string, msg *dns.Msg) error {
 		ZSK: zsk,
 		KSK: ksk,
 	}
-	if err := Verify(z, msg); err != nil {
-		delete(verifiedZones, z)
-		return err
-	}
 
 	return nil
+}
+
+func AddDS(msg *dns.Msg) {
+	for _, rr := range msg.Answer {
+		if rr.Header().Rrtype == dns.TypeDS {
+			zoneDS[rr.Header().Name] = append(zoneDS[rr.Header().Name], rr.(*dns.DS))
+		}
+	}
 }
 
 func GetZoneKeys(z string) ZoneKey {
@@ -201,16 +193,32 @@ func Verify(z string, msg *dns.Msg) error {
 	return nil
 }
 
+func QueryAndVerify(qname string, qtype uint16, auth string, ns string) (*dns.Msg, error) {
+	queryResp, err := Query(qname, qtype, ns)
+	if err != nil {
+		return nil, err
+	}
+	if qtype == dns.TypeDNSKEY {
+		if err := AddKeys(auth, queryResp); err != nil {
+			return nil, err
+		}
+	}
+	if err := Verify(auth, queryResp); err != nil {
+		return nil, err
+	}
+	if qtype == dns.TypeDS {
+		AddDS(queryResp)
+	}
+	return queryResp, nil
+}
+
 func Query1(qname string, qtype uint16) ([]dns.RR, error) {
 	auth := "."
 	ns := "m.root-servers.net."
 
 	for {
-		queryResp, err := Query(qname, dns.TypeDNSKEY, ns)
+		queryResp, err := QueryAndVerify(qname, dns.TypeDNSKEY, auth, ns)
 		if err != nil {
-			return nil, err
-		}
-		if err := Verify(auth, queryResp); err != nil {
 			return nil, err
 		}
 
@@ -218,19 +226,11 @@ func Query1(qname string, qtype uint16) ([]dns.RR, error) {
 		if len(queryResp.Answer) == 0 && len(queryResp.Ns) != 0 && queryResp.Ns[0].Header().Rrtype == dns.TypeNS {
 			parentAuth := auth
 			auth = queryResp.Ns[0].Header().Name
-			dsResp, err := Query(auth, dns.TypeDS, ns)
-			if err != nil {
-				return nil, err
-			}
-			if err := VerifyDS(parentAuth, dsResp); err != nil {
+			if _, err := QueryAndVerify(auth, dns.TypeDS, parentAuth, ns); err != nil {
 				return nil, err
 			}
 			ns = queryResp.Ns[0].(*dns.NS).Ns
-			dnskeyResp, err := Query(auth, dns.TypeDNSKEY, ns)
-			if err != nil {
-				return nil, err
-			}
-			if err := VerifyKeys(auth, dnskeyResp); err != nil {
+			if _, err := QueryAndVerify(auth, dns.TypeDNSKEY, auth, ns); err != nil {
 				return nil, err
 			}
 			fmt.Println("referral: ", ns)
@@ -254,11 +254,8 @@ func Query1(qname string, qtype uint16) ([]dns.RR, error) {
 		}
 		break
 	}
-	queryResp, err := Query(qname, qtype, ns)
+	queryResp, err := QueryAndVerify(qname, qtype, auth, ns)
 	if err != nil {
-		return nil, err
-	}
-	if err := Verify(auth, queryResp); err != nil {
 		return nil, err
 	}
 	return queryResp.Answer, nil
