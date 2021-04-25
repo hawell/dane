@@ -1,4 +1,4 @@
-package main
+package dane
 
 import (
     "crypto/sha256"
@@ -9,9 +9,9 @@ import (
     "fmt"
     "github.com/miekg/dns"
     "log"
-    "net/http"
 )
 
+// TLSA Certificate Usages Registry
 const (
     PkixTA = 0 // Certificate Authority Constraint
     PkixEE = 1 // Service Certificate Constraint
@@ -19,13 +19,26 @@ const (
     DaneEE = 3 // Domain Issued Certificate
 )
 
+// TLSA Selectors
+const (
+    Cert = 0 // Full certificate
+    SPKI = 1 // SubjectPublicKeyInfo
+)
+
+// TLSA Matching Types
+const (
+    Full     = 0 // No hash used
+    SHA2_256 = 1 // 256 bit hash by SHA2
+    SHA2_512 = 2 // 512 bit hash by SHA2
+)
+
 func HashCert(cert *x509.Certificate, selector uint8, hash uint8) (string, error) {
 
     var input []byte
     switch selector {
-    case 0: // whole certificate
+    case Cert:
         input = cert.Raw
-    case 1: // only public key
+    case SPKI:
         input = cert.RawSubjectPublicKeyInfo
     default:
         return "", fmt.Errorf("invalid TLSA selector: %d", selector)
@@ -33,12 +46,12 @@ func HashCert(cert *x509.Certificate, selector uint8, hash uint8) (string, error
 
     var output []byte
     switch hash {
-    case 0: // no hash
+    case Full:
         output = input
-    case 1: // SHA256 hash
+    case SHA2_256:
         tmp := sha256.Sum256(input)
         output = tmp[:]
-    case 2: // SHA512 hash
+    case SHA2_512:
         tmp := sha512.Sum512(input)
         output = tmp[:]
     default:
@@ -65,11 +78,11 @@ func NewTlsConfigWithDane(tlsaRecords []*dns.TLSA) *tls.Config {
             switch tlsa.Usage {
             case PkixTA:
                 /*
-                	tlsa certificate MUST be found in any of the PKIX certification paths
-					for the end entity certificate given by the server in TLS.
-					The presented certificate MUST pass PKIX certification path
-					validation, and a CA certificate that matches the TLSA record MUST
-					be included as part of a valid certification path
+                                	tlsa certificate MUST be found in any of the PKIX certification paths
+                					for the end entity certificate given by the server in TLS.
+                					The presented certificate MUST pass PKIX certification path
+                					validation, and a CA certificate that matches the TLSA record MUST
+                					be included as part of a valid certification path
                 */
                 var opts x509.VerifyOptions
                 opts.Roots = config.RootCAs
@@ -96,48 +109,48 @@ func NewTlsConfigWithDane(tlsaRecords []*dns.TLSA) *tls.Config {
                     }
                 }
             case PkixEE:
-				/*
-					The target certificate MUST pass PKIX certification path validation and MUST
-					match the TLSA record.
-				*/
-				var opts x509.VerifyOptions
-				opts.Roots = config.RootCAs
-				_, err := certs[0].Verify(opts)
-				if err != nil {
-					continue
-				}
-				hash, err := HashCert(certs[0], tlsa.Selector, tlsa.MatchingType)
-				if err != nil {
-					continue
-				}
-				if hash == tlsa.Certificate {
-					return nil
-				}
+                /*
+                	The target certificate MUST pass PKIX certification path validation and MUST
+                	match the TLSA record.
+                */
+                var opts x509.VerifyOptions
+                opts.Roots = config.RootCAs
+                _, err := certs[0].Verify(opts)
+                if err != nil {
+                    continue
+                }
+                hash, err := HashCert(certs[0], tlsa.Selector, tlsa.MatchingType)
+                if err != nil {
+                    continue
+                }
+                if hash == tlsa.Certificate {
+                    return nil
+                }
 
             case DaneTA:
-            	/*
-            		The target certificate MUST pass PKIX certification path validation, with any
-            		certificate matching the TLSA record considered to be a trust
-            		anchor for this certification path validation.
-            	 */
-				var opts x509.VerifyOptions
-				opts.Roots = config.RootCAs
-				for _, cert := range certs[1:] {
-					hash, err := HashCert(certs[0], tlsa.Selector, tlsa.MatchingType)
-					if err == nil && hash == tlsa.Certificate {
-						opts.Roots.AddCert(cert)
-					}
-				}
-				_, err := certs[0].Verify(opts)
-				if err == nil {
-					return nil
-				}
+                /*
+                	The target certificate MUST pass PKIX certification path validation, with any
+                	certificate matching the TLSA record considered to be a trust
+                	anchor for this certification path validation.
+                */
+                var opts x509.VerifyOptions
+                opts.Roots = config.RootCAs
+                for _, cert := range certs[1:] {
+                    hash, err := HashCert(certs[0], tlsa.Selector, tlsa.MatchingType)
+                    if err == nil && hash == tlsa.Certificate {
+                        opts.Roots.AddCert(cert)
+                    }
+                }
+                _, err := certs[0].Verify(opts)
+                if err == nil {
+                    return nil
+                }
 
-			case DaneEE:
-				/*
-					The target certificate MUST match the TLSA record.
-					PKIX validation is not tested for certificate usage 3.
-				 */
+            case DaneEE:
+                /*
+                	The target certificate MUST match the TLSA record.
+                	PKIX validation is not tested for certificate usage 3.
+                */
                 hash, err := HashCert(certs[0], tlsa.Selector, tlsa.MatchingType)
                 if err != nil {
                     continue
@@ -153,18 +166,4 @@ func NewTlsConfigWithDane(tlsaRecords []*dns.TLSA) *tls.Config {
         return fmt.Errorf("no valid certification found")
     }
     return config
-}
-
-func main() {
-    InitVerifiedKeys()
-    tlsa, err := GetTLSA("www.torproject.org.", dns.TypeTLSA)
-    fmt.Println(tlsa, err)
-
-    config := NewTlsConfigWithDane(tlsa)
-    t := &http.Transport{
-        TLSClientConfig: config,
-    }
-    client := http.Client{Transport: t}
-    resp, err := client.Get("https://www.torproject.org")
-    fmt.Println(resp, err)
 }

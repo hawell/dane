@@ -1,4 +1,4 @@
-package main
+package dane
 
 import (
 	"fmt"
@@ -234,7 +234,6 @@ func GetTLSA(qname string, qtype uint16) ([]*dns.TLSA, error) {
 			if _, err := QueryAndVerify(auth, dns.TypeDNSKEY, auth, ns); err != nil {
 				return nil, err
 			}
-			fmt.Println("referral: ", ns)
 			continue
 		}
 
@@ -248,7 +247,6 @@ func GetTLSA(qname string, qtype uint16) ([]*dns.TLSA, error) {
 		}
 		if len(res) > 0 {
 			qname = res[len(res)-1].(*dns.CNAME).Target
-			fmt.Println("cname: ", qname)
 			auth = "."
 			ns = "m.root-servers.net."
 			continue
