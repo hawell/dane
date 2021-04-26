@@ -1,27 +1,41 @@
 package dane_test
 
 import (
+    "crypto/tls"
+    "fmt"
     "github.com/hawell/dane"
-    "github.com/miekg/dns"
     "log"
     "net/http"
+    "time"
 )
 
 func Example() {
-    dane.InitVerifiedKeys()
-    tlsa, err := dane.GetTLSA("www.torproject.org.", dns.TypeTLSA)
-    if err != nil {
-        log.Fatal(err)
-    }
+    r := dane.NewResolver()
 
-    config := dane.NewTlsConfigWithDane(tlsa)
+    config := &tls.Config{
+        InsecureSkipVerify: true,
+        VerifyPeerCertificate: dane.VerifyPeerCertificate(r, nil),
+    }
     t := &http.Transport{
         TLSClientConfig: config,
+        DialTLSContext: dane.DialTLSContext(r, config),
     }
     client := http.Client{Transport: t}
-    _, err = client.Get("https://www.torproject.org")
+    start := time.Now()
+
+    resp, err := client.Get("https://torproject.org")
     if err != nil {
         log.Fatal(err)
     }
+    fmt.Println(resp)
+    fmt.Println(time.Since(start))
+
+    resp, err = client.Get("https://torproject.org")
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println(resp)
+    fmt.Println(time.Since(start))
+
     // Output:
 }
