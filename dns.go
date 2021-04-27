@@ -3,6 +3,7 @@ package dane
 import (
 	"fmt"
 	"github.com/miekg/dns"
+	"github.com/patrickmn/go-cache"
 	"strings"
 	"time"
 )
@@ -22,12 +23,16 @@ type queryRespKey struct {
 	QType uint16
 	NS string
 }
+
+func (r queryRespKey) String() string {
+	return r.QName + "-" + dns.TypeToString[r.QType] + "-" + r.NS
+}
 type Resolver struct {
 	client        *dns.Client
-	zoneDS        map[string][]*dns.DS
-	verifiedZones map[string]zoneKeySet
-	tlsaRecords   map[string][]*dns.TLSA
-	verified      map[queryRespKey]*dns.Msg
+	zoneDS        *cache.Cache
+	verifiedZones *cache.Cache
+	tlsaRecords   *cache.Cache
+	verified      *cache.Cache
 }
 
 func NewResolver() *Resolver {
@@ -36,10 +41,10 @@ func NewResolver() *Resolver {
 			Net:     "udp",
 			Timeout: 2000 * time.Millisecond,
 		},
-		zoneDS:        make(map[string][]*dns.DS),
-		verifiedZones: make(map[string]zoneKeySet),
-		tlsaRecords:   make(map[string][]*dns.TLSA),
-		verified:      make(map[queryRespKey]*dns.Msg),
+		zoneDS:        cache.New(5*time.Minute, 10*time.Minute),
+		verifiedZones: cache.New(5*time.Minute, 10*time.Minute),
+		tlsaRecords:   cache.New(5*time.Minute, 10*time.Minute),
+		verified:      cache.New(5*time.Minute, 10*time.Minute),
 	}
 
 	rootZSK := ". 172800 IN DNSKEY 256 3 8 AwEAAa+HvD7XXjmL+1htThUQyZW7oWGnjzKHJASg3TSR5Bmu5LfnSVW7 fxqZa2oAYo2ionIQWyqAj/loApzg8GNMhyIibftPJso54uWRQ2GaoMrw LD5SLu676kf7urJq6nqdjNC0aJM/C888li69lVH6tiu2tZm1NH3cmgfn MUJpD60bsrDUqs7XwftmNkdkHa4ltQbM3UNPyfTaNBQYoH3wpOpSjdk3 tyDRnreBO6Idrw+DGf/rve4sL3qiSaXfYIkcwAwozxR34iHU5dbCDs8S 6FmZYhoSVKVgNSUkudxhd9/6RrZkYRgvwRsQXl3UwsacU1DsXcORqIC+ 7NlQ6M2OJVU="
@@ -48,10 +53,10 @@ func NewResolver() *Resolver {
 	zsk, _ := dns.NewRR(rootZSK)
 	ksk, _ := dns.NewRR(rootKSK)
 
-	r.verifiedZones["."] = zoneKeySet{
+	r.verifiedZones.Set(".", &zoneKeySet{
 		ZSK: []*dns.DNSKEY{zsk.(*dns.DNSKEY)},
 		KSK: []*dns.DNSKEY{ksk.(*dns.DNSKEY)},
-	}
+	}, 172800*time.Second)
 
 	return r
 }
@@ -82,15 +87,17 @@ func isKSK(k *dns.DNSKEY) bool {
 }
 
 func (r *Resolver) addKeys(z string, msg *dns.Msg) error {
-	if _, ok := r.verifiedZones[z]; ok {
+	if _, ok := r.verifiedZones.Get(z); ok {
 		return nil
 	}
 	var (
 		zsk []*dns.DNSKEY
 		ksk []*dns.DNSKEY
+		ttl uint32
 	)
 	for _, rr := range msg.Answer {
 		if rr.Header().Rrtype == dns.TypeDNSKEY {
+			ttl = rr.Header().Ttl
 			key := rr.(*dns.DNSKEY)
 			if isZSK(key) {
 				zsk = append(zsk, key)
@@ -103,31 +110,39 @@ func (r *Resolver) addKeys(z string, msg *dns.Msg) error {
 	verified := false
 Success:
 	for _, key := range ksk {
-		for _, ds := range r.zoneDS[z] {
-			parentDsDigest := ds.Digest
-			DsDigest := key.ToDS(ds.DigestType).Digest
-			if DsDigest == parentDsDigest {
-				verified = true
-				break Success
+		if v, ok := r.zoneDS.Get(z); ok {
+			for _, ds := range v.([]*dns.DS) {
+				parentDsDigest := ds.Digest
+				DsDigest := key.ToDS(ds.DigestType).Digest
+				if DsDigest == parentDsDigest {
+					verified = true
+					break Success
+				}
 			}
 		}
 	}
 	if !verified {
 		return fmt.Errorf("ds not found for %s", z)
 	}
-	r.verifiedZones[z] = zoneKeySet{
+	r.verifiedZones.Set(z, &zoneKeySet{
 		ZSK: zsk,
 		KSK: ksk,
-	}
+	}, time.Duration(ttl)*time.Second)
 
 	return nil
 }
 
 func (r *Resolver) addDS(msg *dns.Msg) {
+	var rrs []*dns.DS
 	for _, rr := range msg.Answer {
 		if rr.Header().Rrtype == dns.TypeDS {
-			r.zoneDS[rr.Header().Name] = append(r.zoneDS[rr.Header().Name], rr.(*dns.DS))
+			rrs = append(rrs, rr.(*dns.DS))
 		}
+	}
+	if rrs != nil {
+		ttl := rrs[0].Hdr.Ttl
+		name := rrs[0].Hdr.Name
+		r.zoneDS.Set(name, rrs, time.Duration(ttl)*time.Second)
 	}
 }
 
@@ -157,10 +172,11 @@ func splitSets(rrs []dns.RR) map[recordSetKey][]dns.RR {
 }
 
 func (r *Resolver) verify(z string, msg *dns.Msg) error {
-	zoneKeys := r.verifiedZones[z]
-	if zoneKeys.ZSK == nil || zoneKeys.KSK == nil {
+	v, ok := r.verifiedZones.Get(z)
+	if !ok {
 		return fmt.Errorf("zone %s keys not verified", z)
 	}
+	zoneKeys := v.(*zoneKeySet)
 	for _, rrs := range [][]dns.RR{msg.Answer, msg.Ns, msg.Extra} {
 		sets := splitSets(rrs)
 		rrsigSets := make(map[recordSetKey]map[uint16]*dns.RRSIG)
@@ -205,8 +221,8 @@ func (r *Resolver) verify(z string, msg *dns.Msg) error {
 }
 
 func (r *Resolver) queryAndVerify(qname string, qtype uint16, auth string, ns string) (*dns.Msg, error) {
-	if queryResp, ok := r.verified[queryRespKey{QName: qname, QType: qtype, NS: ns}]; ok {
-		return queryResp, nil
+	if queryResp, ok := r.verified.Get(queryRespKey{QName: qname, QType: qtype, NS: ns}.String()); ok {
+		return queryResp.(*dns.Msg), nil
 	}
 	queryResp, err := r.query(qname, qtype, ns)
 	if err != nil {
@@ -223,13 +239,21 @@ func (r *Resolver) queryAndVerify(qname string, qtype uint16, auth string, ns st
 	if qtype == dns.TypeDS {
 		r.addDS(queryResp)
 	}
-	r.verified[queryRespKey{QName: qname, QType: qtype, NS: ns}] = queryResp
+	var ttl uint32 = 0
+	for _, s := range [][]dns.RR{queryResp.Answer, queryResp.Ns} {
+		for _, rr := range s {
+			if rr.Header().Ttl < ttl {
+				ttl = rr.Header().Ttl
+			}
+		}
+	}
+	r.verified.Set(queryRespKey{QName: qname, QType: qtype, NS: ns}.String(), queryResp, time.Duration(ttl)*time.Second)
 	return queryResp, nil
 }
 
 func (r *Resolver) GetTLSA(qname string) error {
 	originalQName := dns.Fqdn(qname)
-	if _, ok := r.tlsaRecords[originalQName]; ok {
+	if _, ok := r.tlsaRecords.Get(originalQName); ok {
 		return nil
 	}
 	qname = "_443._tcp." + originalQName
@@ -282,7 +306,9 @@ func (r *Resolver) GetTLSA(qname string) error {
 			res = append(res, rr.(*dns.TLSA))
 		}
 	}
-	r.tlsaRecords[originalQName] = res
+	if res != nil {
+		r.tlsaRecords.Set(originalQName, res, time.Duration(res[0].Hdr.Ttl)*time.Second)
+	}
 	return nil
 }
 
@@ -292,13 +318,15 @@ func (r *Resolver) FindTlsaRecords(names []string) []*dns.TLSA {
 		name = dns.Fqdn(name)
 		if strings.HasPrefix(name, "*.") {
 			name = strings.TrimPrefix(name, "*.")
-			for qname, tlsaRecords := range r.tlsaRecords {
+			for qname, items := range r.tlsaRecords.Items() {
+				tlsaRecords := items.Object.([]*dns.TLSA)
 				if qname != name && strings.HasSuffix(qname, name) {
 					res = append(res, tlsaRecords...)
 				}
 			}
 		} else {
-			for qname, tlsaRecords := range r.tlsaRecords {
+			for qname, items := range r.tlsaRecords.Items() {
+				tlsaRecords := items.Object.([]*dns.TLSA)
 				if qname == name {
 					res = append(res, tlsaRecords...)
 				}

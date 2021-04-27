@@ -6,7 +6,6 @@ import (
     "github.com/hawell/dane"
     "log"
     "net/http"
-    "time"
 )
 
 func Example() {
@@ -21,21 +20,11 @@ func Example() {
         DialTLSContext: dane.DialTLSContext(r, config),
     }
     client := http.Client{Transport: t}
-    start := time.Now()
 
-    resp, err := client.Get("https://torproject.org")
+    resp, err := client.Get("https://getfedora.org")
     if err != nil {
         log.Fatal(err)
     }
     fmt.Println(resp)
-    fmt.Println(time.Since(start))
-
-    resp, err = client.Get("https://torproject.org")
-    if err != nil {
-        log.Fatal(err)
-    }
-    fmt.Println(resp)
-    fmt.Println(time.Since(start))
-
     // Output:
 }
