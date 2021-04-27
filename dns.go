@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/miekg/dns"
 	"github.com/patrickmn/go-cache"
-	"strings"
 	"time"
 )
 
@@ -257,10 +256,10 @@ func (r *Resolver) queryAndVerify(qname string, qtype uint16, auth string, ns st
 	return queryResp, nil
 }
 
-func (r *Resolver) GetTLSA(qname string) error {
+func (r *Resolver) GetTLSA(qname string) ([]*dns.TLSA, error) {
 	originalQName := dns.Fqdn(qname)
-	if _, ok := r.tlsaRecords.Get(originalQName); ok {
-		return nil
+	if v, ok := r.tlsaRecords.Get(originalQName); ok {
+		return v.([]*dns.TLSA), nil
 	}
 	qname = "_443._tcp." + originalQName
 	auth := "."
@@ -269,7 +268,7 @@ func (r *Resolver) GetTLSA(qname string) error {
 	for {
 		queryResp, err := r.queryAndVerify(qname, dns.TypeDNSKEY, auth, ns)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		// referral
@@ -277,11 +276,11 @@ func (r *Resolver) GetTLSA(qname string) error {
 			parentAuth := auth
 			auth = queryResp.Ns[0].Header().Name
 			if _, err := r.queryAndVerify(auth, dns.TypeDS, parentAuth, ns); err != nil {
-				return err
+				return nil, err
 			}
 			ns = queryResp.Ns[0].(*dns.NS).Ns
 			if _, err := r.queryAndVerify(auth, dns.TypeDNSKEY, auth, ns); err != nil {
-				return err
+				return nil, err
 			}
 			continue
 		}
@@ -304,7 +303,7 @@ func (r *Resolver) GetTLSA(qname string) error {
 	}
 	queryResp, err := r.queryAndVerify(qname, dns.TypeTLSA, auth, ns)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var res []*dns.TLSA
 	for _, rr := range queryResp.Answer {
@@ -315,29 +314,5 @@ func (r *Resolver) GetTLSA(qname string) error {
 	if res != nil {
 		r.tlsaRecords.Set(originalQName, res, time.Duration(res[0].Hdr.Ttl)*time.Second)
 	}
-	return nil
-}
-
-func (r *Resolver) FindTlsaRecords(names []string) []*dns.TLSA {
-	var res []*dns.TLSA
-	for _, name := range names {
-		name = dns.Fqdn(name)
-		if strings.HasPrefix(name, "*.") {
-			name = strings.TrimPrefix(name, "*.")
-			for qname, items := range r.tlsaRecords.Items() {
-				tlsaRecords := items.Object.([]*dns.TLSA)
-				if qname != name && strings.HasSuffix(qname, name) {
-					res = append(res, tlsaRecords...)
-				}
-			}
-		} else {
-			for qname, items := range r.tlsaRecords.Items() {
-				tlsaRecords := items.Object.([]*dns.TLSA)
-				if qname == name {
-					res = append(res, tlsaRecords...)
-				}
-			}
-		}
-	}
-	return res
+	return res, nil
 }
