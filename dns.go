@@ -35,6 +35,12 @@ type Resolver struct {
 	verified      *cache.Cache
 }
 
+var resolver *Resolver
+
+func init() {
+	resolver = NewResolver()
+}
+
 func NewResolver() *Resolver {
 	r := &Resolver{
 		client: &dns.Client{

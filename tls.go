@@ -62,7 +62,7 @@ func hashCert(cert *x509.Certificate, selector uint8, hash uint8) (string, error
     return hex.EncodeToString(output), nil
 }
 
-func VerifyPeerCertificate(r *Resolver, roots *x509.CertPool) func (rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+func VerifyPeerCertificate(roots *x509.CertPool) func (rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
     return func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
         certs := make([]*x509.Certificate, len(rawCerts))
         for i, asn1Data := range rawCerts {
@@ -72,7 +72,7 @@ func VerifyPeerCertificate(r *Resolver, roots *x509.CertPool) func (rawCerts [][
             }
             certs[i] = cert
         }
-        tlsaRecords := r.FindTlsaRecords(certs[0].DNSNames)
+        tlsaRecords := resolver.FindTlsaRecords(certs[0].DNSNames)
 
         for _, tlsa := range tlsaRecords {
             switch tlsa.Usage {
@@ -165,14 +165,14 @@ func VerifyPeerCertificate(r *Resolver, roots *x509.CertPool) func (rawCerts [][
     }
 }
 
-func DialTLSContext(r *Resolver, config *tls.Config) func(ctx context.Context, network, addr string) (net.Conn, error) {
+func DialTLSContext(config *tls.Config) func(ctx context.Context, network, addr string) (net.Conn, error) {
     return func(ctx context.Context, network, addr string) (net.Conn, error) {
         // FIXME: use correct port
         host, _, err := net.SplitHostPort(addr)
         if err != nil {
             return nil, err
         }
-        err = r.GetTLSA(dns.Fqdn(host))
+        err = resolver.GetTLSA(dns.Fqdn(host))
         if err != nil {
             return nil, err
         }

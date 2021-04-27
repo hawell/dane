@@ -9,15 +9,13 @@ import (
 )
 
 func Example() {
-    r := dane.NewResolver()
-
     config := &tls.Config{
         InsecureSkipVerify: true,
-        VerifyPeerCertificate: dane.VerifyPeerCertificate(r, nil),
+        VerifyPeerCertificate: dane.VerifyPeerCertificate(nil),
     }
     t := &http.Transport{
         TLSClientConfig: config,
-        DialTLSContext: dane.DialTLSContext(r, config),
+        DialTLSContext: dane.DialTLSContext(config),
     }
     client := http.Client{Transport: t}
 
