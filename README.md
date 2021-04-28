@@ -15,7 +15,7 @@ t := &http.Transport{
         conn, err := tls.DialWithDialer(dialer, network, addr, &tls.Config{
             InsecureSkipVerify: true,
             VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-                return dane.VerifyPeerCertificate(addr, rawCerts, nil)
+                return dane.VerifyPeerCertificate(network, addr, rawCerts, nil)
             },
         })
         if err != nil {
