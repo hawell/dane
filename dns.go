@@ -256,12 +256,11 @@ func (r *Resolver) queryAndVerify(qname string, qtype uint16, auth string, ns st
 	return queryResp, nil
 }
 
-func (r *Resolver) GetTLSA(qname string) ([]*dns.TLSA, error) {
-	originalQName := dns.Fqdn(qname)
-	if v, ok := r.tlsaRecords.Get(originalQName); ok {
+func (r *Resolver) GetTLSA(network string, qname string, port string) ([]*dns.TLSA, error) {
+	qname = "_" + port + "._" + network + "." + dns.Fqdn(qname)
+	if v, ok := r.tlsaRecords.Get(qname); ok {
 		return v.([]*dns.TLSA), nil
 	}
-	qname = "_443._tcp." + originalQName
 	auth := "."
 	ns := "m.root-servers.net."
 
@@ -312,7 +311,7 @@ func (r *Resolver) GetTLSA(qname string) ([]*dns.TLSA, error) {
 		}
 	}
 	if res != nil {
-		r.tlsaRecords.Set(originalQName, res, time.Duration(res[0].Hdr.Ttl)*time.Second)
+		r.tlsaRecords.Set(qname, res, time.Duration(res[0].Hdr.Ttl)*time.Second)
 	}
 	return res, nil
 }

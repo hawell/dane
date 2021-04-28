@@ -60,7 +60,7 @@ func hashCert(cert *x509.Certificate, selector uint8, hash uint8) (string, error
     return hex.EncodeToString(output), nil
 }
 
-func VerifyPeerCertificate(addr string, rawCerts [][]byte, roots *x509.CertPool) error {
+func VerifyPeerCertificate(network string, addr string, rawCerts [][]byte, roots *x509.CertPool) error {
     certs := make([]*x509.Certificate, len(rawCerts))
     for i, asn1Data := range rawCerts {
         cert, err := x509.ParseCertificate(asn1Data)
@@ -71,14 +71,14 @@ func VerifyPeerCertificate(addr string, rawCerts [][]byte, roots *x509.CertPool)
     }
 
     // FIXME: use correct port, network
-    host, _, err := net.SplitHostPort(addr)
+    host, port, err := net.SplitHostPort(addr)
     if err != nil {
         return err
     }
     if err := certs[0].VerifyHostname(host); err != nil {
         return err
     }
-    tlsaRecords, err := resolver.GetTLSA(dns.Fqdn(host))
+    tlsaRecords, err := resolver.GetTLSA(network, dns.Fqdn(host), port)
     if err != nil {
         return err
     }
