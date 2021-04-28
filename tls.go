@@ -1,3 +1,5 @@
+// Package dane provides functionalities to use DNS-based Authentication of Named Entities
+// aka DANE in standard go tls connections
 package dane
 
 import (
@@ -32,6 +34,7 @@ const (
     sha2_512  = 2 // 512 bit hash by SHA2
 )
 
+// hashCert create a hash from cert to verify it against a TLSA record
 func hashCert(cert *x509.Certificate, selector uint8, hash uint8) (string, error) {
 
     var input []byte
@@ -60,6 +63,11 @@ func hashCert(cert *x509.Certificate, selector uint8, hash uint8) (string, error
     return hex.EncodeToString(output), nil
 }
 
+// VerifyPeerCertificate is a custom tls validator which uses TLSA records
+// to verify provided certificates.
+// InsecureSkipVerify in tls.Config has to be set to true.
+// "network" and "addr" from DialTLS or DialTLSContext are needed
+// to find the matching TLSA record
 func VerifyPeerCertificate(network string, addr string, rawCerts [][]byte, roots *x509.CertPool) error {
     certs := make([]*x509.Certificate, len(rawCerts))
     for i, asn1Data := range rawCerts {

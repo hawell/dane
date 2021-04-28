@@ -26,6 +26,9 @@ type queryRespKey struct {
 func (r queryRespKey) String() string {
 	return r.QName + "-" + dns.TypeToString[r.QType] + "-" + r.NS
 }
+
+// Resolver contains cached query responses
+// and a dns client for querying
 type Resolver struct {
 	client        *dns.Client
 	zoneDS        *cache.Cache
@@ -34,12 +37,14 @@ type Resolver struct {
 	verified      *cache.Cache
 }
 
+// resolver is the internal resolver used for TLSA queries
 var resolver *Resolver
 
 func init() {
 	resolver = NewResolver()
 }
 
+// NewResolver creates a new dns resolver with root keys set
 func NewResolver() *Resolver {
 	r := &Resolver{
 		client: &dns.Client{
@@ -66,6 +71,7 @@ func NewResolver() *Resolver {
 	return r
 }
 
+// query sends a dnssec enabled dns request and wait for the response
 func (r *Resolver) query(qname string, qtype uint16, ns string) (*dns.Msg, error) {
 	m := new(dns.Msg)
 	m.SetQuestion(qname, qtype)
@@ -81,16 +87,18 @@ func (r *Resolver) query(qname string, qtype uint16, ns string) (*dns.Msg, error
 	return resp, nil
 }
 
-// Return true if, and only if, this is a zone key with the SEP bit unset. This implies a ZSK (rfc4034 2.1.1).
+// isZSK Return true if, and only if, this is a zone key with the SEP bit unset. This implies a ZSK (rfc4034 2.1.1).
 func isZSK(k *dns.DNSKEY) bool {
 	return k.Flags&(1<<8) == (1<<8) && k.Flags&1 == 0
 }
 
-// Return true if, and only if, this is a zone key with the SEP bit set. This implies a KSK (rfc4034 2.1.1).
+// isKSK Return true if, and only if, this is a zone key with the SEP bit set. This implies a KSK (rfc4034 2.1.1).
 func isKSK(k *dns.DNSKEY) bool {
 	return k.Flags&(1<<8) == (1<<8) && k.Flags&1 == 1
 }
 
+// addKey extract DNSKEY RRSets from response and verify them against DS record
+// already retrieved from parent zone and store then in cache
 func (r *Resolver) addKeys(z string, msg *dns.Msg) error {
 	if _, ok := r.verifiedZones.Get(z); ok {
 		return nil
@@ -137,6 +145,7 @@ Success:
 	return nil
 }
 
+// addDS extract DS RRSets from response and store them in cache
 func (r *Resolver) addDS(msg *dns.Msg) {
 	var rrs []*dns.DS
 	for _, rr := range msg.Answer {
@@ -151,6 +160,8 @@ func (r *Resolver) addDS(msg *dns.Msg) {
 	}
 }
 
+// splitSets split Resource Records in a response and group them
+// based on qname and qtype
 func splitSets(rrs []dns.RR) map[recordSetKey][]dns.RR {
 	m := make(map[recordSetKey][]dns.RR)
 
@@ -225,6 +236,10 @@ func (r *Resolver) verify(z string, msg *dns.Msg) error {
 	return nil
 }
 
+// queryAndVerify send a dns request to the specified ns and verify and cache the response.
+// since DNSKEY records are verified against themselves they need to be added before; they
+// also have to match with a DS record obtained from parent zone
+// minimum ttl from Answer and Authority parts is used for cache timeout
 func (r *Resolver) queryAndVerify(qname string, qtype uint16, auth string, ns string) (*dns.Msg, error) {
 	if queryResp, ok := r.verified.Get(queryRespKey{QName: qname, QType: qtype, NS: ns}.String()); ok {
 		return queryResp.(*dns.Msg), nil
@@ -256,11 +271,9 @@ func (r *Resolver) queryAndVerify(qname string, qtype uint16, auth string, ns st
 	return queryResp, nil
 }
 
-func (r *Resolver) GetTLSA(network string, qname string, port string) ([]*dns.TLSA, error) {
-	qname = "_" + port + "._" + network + "." + dns.Fqdn(qname)
-	if v, ok := r.tlsaRecords.Get(qname); ok {
-		return v.([]*dns.TLSA), nil
-	}
+// Get starts a recursive dnssec query from root zone
+// and verify responses along the way
+func (r *Resolver) Get(qname string, qtype uint16) (*dns.Msg, error) {
 	auth := "."
 	ns := "m.root-servers.net."
 
@@ -300,7 +313,23 @@ func (r *Resolver) GetTLSA(network string, qname string, port string) ([]*dns.TL
 		}
 		break
 	}
-	queryResp, err := r.queryAndVerify(qname, dns.TypeTLSA, auth, ns)
+	queryResp, err := r.queryAndVerify(qname, qtype, auth, ns)
+	if err != nil {
+		return nil, err
+	}
+	return queryResp, nil
+}
+
+// GetTLSA create a valid qname for TLSA from network, qname and port
+// and retrieve the results using Resolver.Get()
+// for example with network = "tcp" and port = "443" and qname = "www.example.com
+// the resulting qname would be: "_443._tcp.www.example.com."
+func (r *Resolver) GetTLSA(network string, qname string, port string) ([]*dns.TLSA, error) {
+	qname = "_" + port + "._" + network + "." + dns.Fqdn(qname)
+	if v, ok := r.tlsaRecords.Get(qname); ok {
+		return v.([]*dns.TLSA), nil
+	}
+	queryResp, err := r.Get(qname, dns.TypeTLSA)
 	if err != nil {
 		return nil, err
 	}
