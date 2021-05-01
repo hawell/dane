@@ -46,6 +46,12 @@ func init() {
 
 // NewResolver creates a new dns resolver with root keys set
 func NewResolver() *Resolver {
+	trustAnchor, err := GetTrustAnchor()
+	if err != nil {
+		return nil
+	}
+	rootDS := TrustAnchorToDS(trustAnchor)
+
 	r := &Resolver{
 		client: &dns.Client{
 			Net:     "udp",
@@ -57,16 +63,7 @@ func NewResolver() *Resolver {
 		verified:      cache.New(5*time.Minute, 10*time.Minute),
 	}
 
-	rootZSK := ". 172800 IN DNSKEY 256 3 8 AwEAAa+HvD7XXjmL+1htThUQyZW7oWGnjzKHJASg3TSR5Bmu5LfnSVW7 fxqZa2oAYo2ionIQWyqAj/loApzg8GNMhyIibftPJso54uWRQ2GaoMrw LD5SLu676kf7urJq6nqdjNC0aJM/C888li69lVH6tiu2tZm1NH3cmgfn MUJpD60bsrDUqs7XwftmNkdkHa4ltQbM3UNPyfTaNBQYoH3wpOpSjdk3 tyDRnreBO6Idrw+DGf/rve4sL3qiSaXfYIkcwAwozxR34iHU5dbCDs8S 6FmZYhoSVKVgNSUkudxhd9/6RrZkYRgvwRsQXl3UwsacU1DsXcORqIC+ 7NlQ6M2OJVU="
-	rootKSK := ". 172800 IN DNSKEY 257 3 8 AwEAAaz/tAm8yTn4Mfeh5eyI96WSVexTBAvkMgJzkKTOiW1vkIbzxeF3 +/4RgWOq7HrxRixHlFlExOLAJr5emLvN7SWXgnLh4+B5xQlNVz8Og8kv ArMtNROxVQuCaSnIDdD5LKyWbRd2n9WGe2R8PzgCmr3EgVLrjyBxWezF 0jLHwVN8efS3rCj/EWgvIWgb9tarpVUDK/b58Da+sqqls3eNbuv7pr+e oZG+SrDK6nWeL3c6H5Apxz7LjVc1uTIdsIXxuOLYA4/ilBmSVIzuDWfd RUfhHdY6+cn8HFRm+2hM8AnXGXws9555KrUB5qihylGa8subX2Nn6UwN R1AkUTV74bU="
-
-	zsk, _ := dns.NewRR(rootZSK)
-	ksk, _ := dns.NewRR(rootKSK)
-
-	r.verifiedZones.Set(".", &zoneKeySet{
-		ZSK: []*dns.DNSKEY{zsk.(*dns.DNSKEY)},
-		KSK: []*dns.DNSKEY{ksk.(*dns.DNSKEY)},
-	}, 172800*time.Second)
+	r.zoneDS.Set(".", rootDS, cache.NoExpiration)
 
 	return r
 }
@@ -276,6 +273,11 @@ func (r *Resolver) queryAndVerify(qname string, qtype uint16, auth string, ns st
 func (r *Resolver) Get(qname string, qtype uint16) (*dns.Msg, error) {
 	auth := "."
 	ns := "m.root-servers.net."
+	if _, ok := r.verifiedZones.Get("."); !ok {
+		if _, err := r.queryAndVerify(".", dns.TypeDNSKEY, ".", ns); err != nil {
+			return nil, err
+		}
+	}
 
 	for {
 		queryResp, err := r.queryAndVerify(qname, dns.TypeDNSKEY, auth, ns)
