@@ -20,7 +20,7 @@ type recordSetKey struct {
 type queryRespKey struct {
 	QName string
 	QType uint16
-	NS string
+	NS    string
 }
 
 func (r queryRespKey) String() string {
@@ -46,11 +46,11 @@ func init() {
 
 // NewResolver creates a new dns resolver with root keys set
 func NewResolver() *Resolver {
-	trustAnchor, err := GetTrustAnchor()
+	trustAnchor, err := getTrustAnchor()
 	if err != nil {
 		return nil
 	}
-	rootDS := TrustAnchorToDS(trustAnchor)
+	rootDS := trustAnchorToDS(trustAnchor)
 
 	r := &Resolver{
 		client: &dns.Client{
@@ -73,7 +73,7 @@ func (r *Resolver) query(qname string, qtype uint16, ns string) (*dns.Msg, error
 	m := new(dns.Msg)
 	m.SetQuestion(qname, qtype)
 	m.SetEdns0(4096, true)
-	resp, _, err := r.client.Exchange(m, ns + ":53")
+	resp, _, err := r.client.Exchange(m, ns+":53")
 	if err != nil {
 		return nil, err
 	}
