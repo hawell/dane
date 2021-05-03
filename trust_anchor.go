@@ -49,7 +49,6 @@ func GetTrustAnchor() (*TrustAnchor, error) {
     if err := xml.Unmarshal(byteValue, &trustAnchor); err != nil {
         return nil, err
     }
-    fmt.Println(trustAnchor)
     return &trustAnchor, nil
 }
 
