@@ -77,7 +77,6 @@ func ExampleSMTP() {
 	}
 
 	fmt.Println("success")
-
 	// Output:
 	// success
 }

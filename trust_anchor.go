@@ -15,7 +15,7 @@ type trustAnchor struct {
 	Id         string      `xml:"id,attr"`
 	Source     string      `xml:"source,attr"`
 	Zone       string      `xml:"Zone"`
-	KeyDigests []keyDigest `xml:"keyDigest"`
+	KeyDigests []keyDigest `xml:"KeyDigest"`
 }
 
 // keyDigest is part of trustAnchor xml object representation

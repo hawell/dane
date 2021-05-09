@@ -69,7 +69,11 @@ func NewResolver() *Resolver {
 }
 
 // query sends a dnssec enabled dns request and wait for the response
+// minimum ttl from Answer and Authority parts is used for cache timeout
 func (r *Resolver) query(qname string, qtype uint16, ns string) (*dns.Msg, error) {
+	if queryResp, ok := r.verified.Get(queryRespKey{QName: qname, QType: qtype, NS: ns}.String()); ok {
+		return queryResp.(*dns.Msg), nil
+	}
 	m := new(dns.Msg)
 	m.SetQuestion(qname, qtype)
 	m.SetEdns0(4096, true)
@@ -79,6 +83,27 @@ func (r *Resolver) query(qname string, qtype uint16, ns string) (*dns.Msg, error
 	}
 	if resp.Rcode != dns.RcodeSuccess {
 		return nil, fmt.Errorf("dns error: %d", resp.Rcode)
+	}
+
+	var ttl uint32 = 0
+	final := false
+	for _, rr := range resp.Answer {
+		if rr.Header().Rrtype == qtype {
+			final = true
+		}
+		if rr.Header().Ttl < ttl {
+			ttl = rr.Header().Ttl
+		}
+	}
+	for _, rr := range resp.Ns {
+		if rr.Header().Ttl < ttl {
+			ttl = rr.Header().Ttl
+		}
+	}
+	if final {
+		r.verified.Set(queryRespKey{QName: qname, QType: qtype, NS: ""}.String(), resp, time.Duration(ttl)*time.Second)
+	} else {
+		r.verified.Set(queryRespKey{QName: qname, QType: qtype, NS: ns}.String(), resp, time.Duration(ttl)*time.Second)
 	}
 
 	return resp, nil
@@ -236,11 +261,7 @@ func (r *Resolver) verify(z string, msg *dns.Msg) error {
 // queryAndVerify send a dns request to the specified ns and verify and cache the response.
 // since DNSKEY records are verified against themselves they need to be added before; they
 // also have to match with a DS record obtained from parent zone
-// minimum ttl from Answer and Authority parts is used for cache timeout
 func (r *Resolver) queryAndVerify(qname string, qtype uint16, auth string, ns string) (*dns.Msg, error) {
-	if queryResp, ok := r.verified.Get(queryRespKey{QName: qname, QType: qtype, NS: ns}.String()); ok {
-		return queryResp.(*dns.Msg), nil
-	}
 	queryResp, err := r.query(qname, qtype, ns)
 	if err != nil {
 		return nil, err
@@ -256,21 +277,16 @@ func (r *Resolver) queryAndVerify(qname string, qtype uint16, auth string, ns st
 	if qtype == dns.TypeDS {
 		r.addDS(queryResp)
 	}
-	var ttl uint32 = 0
-	for _, s := range [][]dns.RR{queryResp.Answer, queryResp.Ns} {
-		for _, rr := range s {
-			if rr.Header().Ttl < ttl {
-				ttl = rr.Header().Ttl
-			}
-		}
-	}
-	r.verified.Set(queryRespKey{QName: qname, QType: qtype, NS: ns}.String(), queryResp, time.Duration(ttl)*time.Second)
 	return queryResp, nil
 }
 
 // Get starts a recursive dnssec query from root zone
 // and verify responses along the way
 func (r *Resolver) Get(qname string, qtype uint16) (*dns.Msg, error) {
+	if queryResp, ok := r.verified.Get(queryRespKey{QName: qname, QType: qtype}.String()); ok {
+		return queryResp.(*dns.Msg), nil
+	}
+
 	auth := "."
 	ns := "m.root-servers.net."
 	if _, ok := r.verifiedZones.Get("."); !ok {
