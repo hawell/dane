@@ -35,7 +35,7 @@ func ExampleHTTP() {
 	}
 	client := http.Client{Transport: t}
 
-	_, err := client.Get("https://www.fedoraproject.org")
+	_, err := client.Get("https://zone-42.com")
 	if err != nil {
 		log.Fatal(err)
 	}
