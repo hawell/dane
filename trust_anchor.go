@@ -4,7 +4,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"github.com/miekg/dns"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -41,7 +41,7 @@ func getTrustAnchor() (*trustAnchor, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("bad http response: %d", resp.StatusCode)
 	}
-	byteValue, err := ioutil.ReadAll(resp.Body)
+	byteValue, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}

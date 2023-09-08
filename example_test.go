@@ -14,6 +14,15 @@ import (
 )
 
 func ExampleHTTP() {
+
+	var (
+		certPool *x509.CertPool
+		err      error
+	)
+	certPool, err = dane.AcmeCertPool()
+	if err != nil {
+		log.Printf("failed to load mozilla cert pool: %+v, using default", err)
+	}
 	t := &http.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dialer := &net.Dialer{
@@ -24,7 +33,7 @@ func ExampleHTTP() {
 			conn, err := tls.DialWithDialer(dialer, network, addr, &tls.Config{
 				InsecureSkipVerify: true,
 				VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-					return dane.VerifyPeerCertificate(network, addr, rawCerts, nil)
+					return dane.VerifyPeerCertificate(network, addr, rawCerts, certPool)
 				},
 			})
 			if err != nil {
@@ -35,7 +44,7 @@ func ExampleHTTP() {
 	}
 	client := http.Client{Transport: t}
 
-	_, err := client.Get("https://zone-42.com")
+	_, err = client.Get("https://zone-42.com")
 	if err != nil {
 		log.Fatal(err)
 	}
